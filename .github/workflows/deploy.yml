@@ -17,10 +17,15 @@ jobs:
       - name: Checkout your repository using git
         uses: actions/checkout@v4
 
+      - name: Fetch forum data
+        run: |
+          rm -rf data
+          git clone --depth 1 https://x-access-token:${{ secrets.FORUM_DATA_TOKEN }}@github.com/visbot/forum-data.git data
+
       - name: Install, build, and upload your site
         uses: withastro/action@v3
         with:
-          node-version: 22
+          node-version: 24
 
   deploy:
     needs: build
