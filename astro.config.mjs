@@ -1,26 +1,14 @@
 // @ts-check
-import { defineConfig, envField } from 'astro/config';
+import { defineConfig } from 'astro/config';
 import icons from 'unplugin-icons/vite';
 import tailwindcss from '@tailwindcss/vite';
-
-const isPagesAction = Boolean(process.env.GITHUB_ACTIONS);
-const [owner, repo] = (process.env.GITHUB_REPOSITORY ?? '').split('/');
-const isUserRepo = repo === `${owner}.github.io`;
+import { githubPages, siteConfig } from './.castro/config.ts';
 
 export default defineConfig({
-	...(isPagesAction && {
-		site: `https://${owner}.github.io`,
-		...(!isUserRepo && { base: `/${repo}` }),
-	}),
-	env: {
-		schema: {
-			SITE_NAME: envField.string({
-				context: 'server',
-				access: 'public',
-				default: 'Forum Archive',
-			}),
-		},
-	},
+	...githubPages(),
+	...siteConfig({
+    title: 'AVS Forums Archive'
+  }),
 	vite: {
 		plugins: [
 			icons({
