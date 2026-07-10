@@ -9,7 +9,7 @@ export default defineConfig({
 	...siteConfig({
     title: 'AVS Forum Archive',
     description: 'Mirror of the AVS forum on Winamp.com',
-    keywords: ['AVS Presets', 'avs', 'Advanced Visualization Studio', 'wvs', 'Winamp Visualization Studio']
+    keywords: ['AVS Presets', 'avs', 'Advanced Visualization Studio', 'winamp', 'wvs', 'Winamp Visualization Studio', 'audio visualization']
   }),
 	vite: {
 		plugins: [
