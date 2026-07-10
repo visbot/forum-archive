@@ -7,7 +7,9 @@ import { githubPages, siteConfig } from './.castro/config.ts';
 export default defineConfig({
 	...githubPages(),
 	...siteConfig({
-    title: 'AVS Forums Archive'
+    title: 'AVS Forum Archive',
+    description: 'Mirror of the AVS forum on Winamp.com',
+    keywords: ['AVS Presets', 'avs', 'Advanced Visualization Studio', 'wvs', 'Winamp Visualization Studio']
   }),
 	vite: {
 		plugins: [
