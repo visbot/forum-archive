@@ -1,21 +1,14 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
-import icons from 'unplugin-icons/vite';
-import tailwindcss from '@tailwindcss/vite';
-import { dataSymlinks, githubPages, siteConfig } from './.castro/config.ts';
+import sitemap from '@astrojs/sitemap';
+import castro from './.castro/integration.ts';
 
 export default defineConfig({
-	...githubPages(),
-	...siteConfig({
-		title: 'Forum Archive',
-	}),
-	vite: {
-		plugins: [
-			icons({
-				compiler: 'astro',
-			}),
-			tailwindcss(),
-			dataSymlinks(),
-		],
-	},
+	integrations: [
+		castro({
+			title: 'Forum Archive',
+			githubPages: true,
+		}),
+		sitemap(),
+	],
 });
