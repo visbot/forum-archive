@@ -6,7 +6,7 @@ import castro from './.castro/integration.ts';
 export default defineConfig({
 	integrations: [
 		castro({
-			title: 'Forum Archive',
+			title: 'AVS Forum Archive',
 			githubPages: true,
 		}),
 		sitemap(),
