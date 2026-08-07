@@ -5,6 +5,7 @@ export type { MemberData } from './types.ts';
 import { threadIdFromUrl, threadSlug } from './format.ts';
 
 const DATA_ROOT = join(process.cwd(), 'data');
+const TRUNCATE_LENGTH = 400;
 
 // Use globalThis so caches survive module re-evaluation during Astro's build
 const g = globalThis as Record<string, unknown>;
@@ -94,8 +95,18 @@ const loadThreadToForum = cached('threadToForum', async () => {
 	return map;
 });
 
+export interface MemberThread {
+	id: string;
+	title: string;
+	slug: string;
+	/** Last post by the member for recent activity, thread creation date otherwise. */
+	date: string;
+	responses?: number;
+	views?: number;
+}
+
 const loadMemberThreadIndex = cached('memberThreadIndex', async () => {
-	const index = new Map<string, { id: string; title: string; slug: string; lastDate: string }[]>();
+	const index = new Map<string, MemberThread[]>();
 	const threads = await loadAllThreads();
 	for (const [id, thread] of threads) {
 		const byAuthor = new Map<string, string>();
@@ -112,12 +123,40 @@ const loadMemberThreadIndex = cached('memberThreadIndex', async () => {
 				list = [];
 				index.set(author, list);
 			}
-			list.push({ id, title: thread.title, slug, lastDate });
+			list.push({ id, title: thread.title, slug, date: lastDate });
 		}
 	}
 	for (const list of index.values()) {
-		list.sort((a, b) => b.lastDate.localeCompare(a.lastDate));
+		list.sort((a, b) => b.date.localeCompare(a.date));
 		if (list.length > 10) list.length = 10;
+	}
+	return index;
+});
+
+/** Threads grouped by the member who started them, from the forum listings. */
+const loadMemberStartedIndex = cached('memberStartedIndex', async () => {
+	const index = new Map<string, MemberThread[]>();
+	const forums = await loadForums();
+	const seen = new Set<string>();
+	for (const forum of forums) {
+		for (const t of forum.threads) {
+			const id = threadIdFromUrl(t.url);
+			if (!id || seen.has(id)) continue;
+			seen.add(id);
+			let list = index.get(t.startedBy);
+			if (!list) {
+				list = [];
+				index.set(t.startedBy, list);
+			}
+			list.push({
+				id,
+				title: t.title,
+				slug: threadSlug(id, t.title),
+				date: t.createdDate,
+				responses: t.responses,
+				views: t.views,
+			});
+		}
 	}
 	return index;
 });
@@ -192,14 +231,28 @@ export async function getThreadTeaser(id: string): Promise<ThreadTeaser | undefi
 	return {
 		title: thread.title,
 		author: first.author,
-		excerpt: plain.length > 200 ? plain.slice(0, 200) + '…' : plain,
+		excerpt: plain.length > TRUNCATE_LENGTH ? plain.slice(0, TRUNCATE_LENGTH) + '…' : plain,
 		postCount: thread.posts.length,
 	};
 }
 
-export async function getThreadsForMember(memberName: string): Promise<{ id: string; title: string; slug: string }[]> {
+export async function getThreadsForMember(memberName: string): Promise<MemberThread[]> {
 	const index = await loadMemberThreadIndex();
 	return index.get(memberName) ?? [];
+}
+
+/** Threads the member started, ranked by `responses` or `views` (descending). */
+export async function getTopThreadsByMember(
+	memberName: string,
+	by: 'responses' | 'views',
+	limit = 10,
+): Promise<MemberThread[]> {
+	const index = await loadMemberStartedIndex();
+	const started = index.get(memberName) ?? [];
+	return started
+		.filter((t) => (t[by] ?? 0) > 0)
+		.toSorted((a, b) => (b[by] ?? 0) - (a[by] ?? 0))
+		.slice(0, limit);
 }
 
 export interface Breadcrumb {
