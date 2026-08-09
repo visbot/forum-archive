@@ -7,6 +7,7 @@ export default defineConfig({
 	integrations: [
 		castro({
 			title: 'Forum Archive',
+			description: 'Unofficial archive for the Winamp AVS forum',
 			githubPages: true,
 		}),
 		sitemap(),
