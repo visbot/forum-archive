@@ -8,6 +8,15 @@ export default defineConfig({
 		castro({
 			title: 'Forum Archive',
 			description: 'Unofficial archive for the Winamp AVS forum',
+			keywords: [
+				'AVS Presets',
+				'avs',
+				'Advanced Visualization Studio',
+				'winamp',
+				'wvs',
+				'Winamp Visualization Studio',
+				'audio visualization',
+			],
 			githubPages: true,
 		}),
 		sitemap(),
