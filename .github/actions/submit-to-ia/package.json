@@ -1,0 +1,8 @@
+{
+	"name": "@castro/submit-to-ia",
+	"private": true,
+	"type": "module",
+	"dependencies": {
+		"@actions/core": "^3.0.1"
+	}
+}
