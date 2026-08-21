@@ -24,4 +24,11 @@ pnpm-debug.log*
 .idea/
 
 # forum data
+data/.cache/
 data/cache/
+
+# generated symlinks
+public/attachments
+
+# internet archive url chunks
+ia-chunks/

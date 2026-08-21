@@ -18,7 +18,7 @@ async function run(): Promise<void> {
 			throw new Error(`Invalid chunk-size: ${core.getInput('chunk-size')}`);
 		}
 
-		const outputDir = core.getInput('output-dir') || '.ia-chunks';
+		const outputDir = core.getInput('output-dir') || 'ia-chunks';
 		await mkdir(outputDir, { recursive: true });
 
 		const indices: number[] = [];

@@ -10,9 +10,10 @@ inputs:
     required: false
     default: '50'
   output-dir:
+    # Not a dot-directory, since upload-artifact skips hidden files by default
     description: 'Directory the chunk files are written to'
     required: false
-    default: '.ia-chunks'
+    default: 'ia-chunks'
 
 outputs:
   matrix:
