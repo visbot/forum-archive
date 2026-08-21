@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
 import * as core from '@actions/core';
+import Sitemapper from 'sitemapper';
 
 /**
  * Save Page Now 2 (SPN2) API.
@@ -14,8 +14,12 @@ const RETRY_DELAYS = [2_500, 5_000, 10_000, 20_000];
 /** Timeout for a single HTTP request, in milliseconds. */
 const REQUEST_TIMEOUT = 30_000;
 
-/** Give up on a capture job after this long, in milliseconds. */
-const JOB_TIMEOUT = 300_000;
+/**
+ * Give up on a capture job after this long, in milliseconds. Capturing outlinks
+ * keeps a job pending until every discovered link has been queued, which takes
+ * far longer than a lone page.
+ */
+const JOB_TIMEOUT = { page: 300_000, outlinks: 1_800_000 };
 
 /** Status codes worth retrying, everything else fails fast. */
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -33,8 +37,14 @@ type StatusResponse = {
 	original_url?: string;
 	timestamp?: string;
 	duration_sec?: number;
+	outlinks?: string[] | Record<string, unknown>;
 	message?: string;
 	status_ext?: string;
+};
+
+type CaptureOptions = {
+	ifNotArchivedWithin: string;
+	captureOutlinks: boolean;
 };
 
 function sleep(ms: number): Promise<void> {
@@ -117,7 +127,7 @@ async function readJson<T>(response: Response, label: string): Promise<T> {
 }
 
 /** Requests a capture and returns the job ID assigned to it. */
-async function requestCapture(url: string, headers: HeadersInit, ifNotArchivedWithin: string): Promise<string> {
+async function requestCapture(url: string, headers: HeadersInit, options: CaptureOptions): Promise<string> {
 	const body = new URLSearchParams({
 		url,
 		// Skips the "is this the first capture?" lookup, which we don't report on
@@ -126,8 +136,14 @@ async function requestCapture(url: string, headers: HeadersInit, ifNotArchivedWi
 
 	// Lets the Archive itself decide whether a fresh capture is warranted, which
 	// is cheaper than us querying the availability API for every single URL
-	if (ifNotArchivedWithin) {
-		body.set('if_not_archived_within', ifNotArchivedWithin);
+	if (options.ifNotArchivedWithin) {
+		body.set('if_not_archived_within', options.ifNotArchivedWithin);
+	}
+
+	// Has the Archive follow every link on the page, so listing pages can stand
+	// in for the thousands of pages they link to
+	if (options.captureOutlinks) {
+		body.set('capture_outlinks', '1');
 	}
 
 	const response = await fetchWithRetry(SAVE_ENDPOINT, { method: 'POST', headers, body }, `Capture of ${url}`);
@@ -141,8 +157,8 @@ async function requestCapture(url: string, headers: HeadersInit, ifNotArchivedWi
 }
 
 /** Polls a capture job until it succeeds, fails, or we run out of patience. */
-async function awaitCapture(jobId: string, headers: HeadersInit): Promise<StatusResponse> {
-	const deadline = Date.now() + JOB_TIMEOUT;
+async function awaitCapture(jobId: string, headers: HeadersInit, timeout: number): Promise<StatusResponse> {
+	const deadline = Date.now() + timeout;
 	const label = `Status of ${jobId}`;
 
 	for (let poll = 0; ; poll++) {
@@ -155,7 +171,7 @@ async function awaitCapture(jobId: string, headers: HeadersInit): Promise<Status
 		if (result.status !== 'pending') return result;
 
 		if (Date.now() >= deadline) {
-			throw new Error(`Capture job ${jobId} still pending after ${JOB_TIMEOUT / 1_000}s`);
+			throw new Error(`Capture job ${jobId} still pending after ${timeout / 1_000}s`);
 		}
 	}
 }
@@ -207,16 +223,20 @@ function createThrottle(interval: number): () => Promise<void> {
 }
 
 /** Captures a single URL, returning an error message when it didn't work out. */
-async function captureUrl(url: string, headers: HeadersInit, ifNotArchivedWithin: string): Promise<string | undefined> {
+async function captureUrl(url: string, headers: HeadersInit, options: CaptureOptions): Promise<string | undefined> {
 	try {
-		const jobId = await requestCapture(url, headers, ifNotArchivedWithin);
-		const result = await awaitCapture(jobId, headers);
+		const jobId = await requestCapture(url, headers, options);
+		const timeout = options.captureOutlinks ? JOB_TIMEOUT.outlinks : JOB_TIMEOUT.page;
+		const result = await awaitCapture(jobId, headers, timeout);
 
 		if (result.status !== 'success' || !result.timestamp) {
 			throw new Error(result.message ?? result.status_ext ?? 'capture failed');
 		}
 
-		core.info(`Archived as https://web.archive.org/web/${result.timestamp}/${url} (${result.duration_sec}s)`);
+		const outlinks = Object.keys(result.outlinks ?? {}).length;
+		const queued = outlinks > 0 ? `, queued ${outlinks} outlinks` : '';
+
+		core.info(`Archived as https://web.archive.org/web/${result.timestamp}/${url} (${result.duration_sec}s${queued})`);
 
 		return undefined;
 	} catch (error) {
@@ -224,9 +244,20 @@ async function captureUrl(url: string, headers: HeadersInit, ifNotArchivedWithin
 	}
 }
 
-/** Captures a chunk of URLs, returning the ones that didn't make it. */
+/** Captures a list of URLs, returning the ones that didn't make it. */
 async function submitUrls(urls: string[], headers: HeadersInit): Promise<string[]> {
-	const ifNotArchivedWithin = core.getInput('if-not-archived-within');
+	// Dropping the timespan leaves SPN2 with no reason to reuse a snapshot, so a
+	// forced run captures every URL afresh however recently it was archived
+	const forceNew = core.getBooleanInput('force-new');
+	const options: CaptureOptions = {
+		ifNotArchivedWithin: forceNew ? '' : core.getInput('if-not-archived-within'),
+		captureOutlinks: core.getBooleanInput('capture-outlinks'),
+	};
+
+	if (forceNew) {
+		core.info('Forcing a fresh capture of every URL, existing snapshots are ignored.');
+	}
+
 	// Authenticated accounts get 6 captures per minute and 7 concurrent sessions
 	const throttle = createThrottle(readNumber('request-delay', 10_000, 0));
 	const concurrency = readNumber('concurrency', 6, 1);
@@ -239,7 +270,7 @@ async function submitUrls(urls: string[], headers: HeadersInit): Promise<string[
 			await throttle();
 			core.info(`Submitting ${url} to Internet Archive...`);
 
-			const error = await captureUrl(url, headers, ifNotArchivedWithin);
+			const error = await captureUrl(url, headers, options);
 
 			if (error) {
 				failures.push(url);
@@ -254,23 +285,39 @@ async function submitUrls(urls: string[], headers: HeadersInit): Promise<string[
 }
 
 /**
- * Reads the chunk either from a file or straight from an input. Sitemaps large
- * enough to matter blow past the 1 MB cap on job outputs, so the workflow hands
- * chunks over as an artifact instead of inlining them.
+ * Narrows the sitemap down to the URLs worth submitting. A URL has to match one
+ * of the include patterns, if any are given, and none of the exclude patterns.
  */
-async function readChunk(): Promise<string[]> {
-	const chunkFile = core.getInput('url-chunk-file');
-	const raw = chunkFile ? await readFile(chunkFile, 'utf8') : core.getInput('url-chunk', { required: true });
+function filterUrls(sites: string[]): string[] {
+	const include = core.getMultilineInput('include').map((pattern) => new RegExp(pattern, 'u'));
+	const exclude = core.getMultilineInput('exclude').map((pattern) => new RegExp(pattern, 'u'));
 
-	return JSON.parse(raw);
+	if (include.length === 0 && exclude.length === 0) return sites;
+
+	return sites.filter((url) => {
+		if (include.length > 0 && !include.some((pattern) => pattern.test(url))) return false;
+
+		return !exclude.some((pattern) => pattern.test(url));
+	});
+}
+
+async function readSitemap(): Promise<string[]> {
+	const sitemapUrl = core.getInput('sitemap-url', { required: true });
+	const { sites } = await new Sitemapper({ timeout: 10_000 }).fetch(sitemapUrl);
+	const urls = filterUrls(sites);
+
+	core.info(`Found ${sites.length} URLs in sitemap, ${urls.length} of them match the filters.`);
+
+	if (urls.length === 0) {
+		throw new Error('No URLs left after filtering');
+	}
+
+	return urls;
 }
 
 async function run(): Promise<void> {
 	try {
-		const urls = await readChunk();
-
-		core.info(`Processing ${urls.length} URLs...`);
-
+		const urls = await readSitemap();
 		const failures = await submitUrls(urls, buildHeaders());
 
 		core.info(`Archived ${urls.length - failures.length}/${urls.length} URLs`);
