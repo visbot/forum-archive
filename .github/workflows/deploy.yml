@@ -17,6 +17,11 @@ jobs:
       - name: Checkout your repository using git
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Fetch forum data
+        run: |
+          rm -rf data
+          git clone --depth 1 https://x-access-token:${{ secrets.FORUM_DATA_TOKEN }}@github.com/visbot/forum-data.git data
+
       - name: Install, build, and upload your site
         uses: withastro/action@e84f40bd8d2caa9e768ec82ad30dd81f0b280853 # v6.1.2
 
