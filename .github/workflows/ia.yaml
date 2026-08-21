@@ -14,7 +14,7 @@ jobs:
       matrix: ${{ steps.generate-chunks.outputs.matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up mise
         uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
@@ -39,11 +39,23 @@ jobs:
         id: pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
+      # Chunks are sized to keep a submit job well inside the 6 hour job limit,
+      # at the Internet Archive's budget of 6 captures per minute
       - name: Generate URL Chunks
         id: generate-chunks
         uses: './.github/actions/generate-chunks'
         with:
           sitemap-url: ${{ format('{0}/sitemap-index.xml', steps.pages.outputs.base_url) }}
+          chunk-size: '1500'
+
+      # The URLs travel as an artifact rather than a job output, which is capped
+      # at 1 MB and overflows on sitemaps of a few thousand pages
+      - name: Upload URL Chunks
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ia-url-chunks
+          path: ${{ steps.generate-chunks.outputs.chunk-dir }}
+          retention-days: 1
 
   # Job 2: Process chunks in parallel via matrix
   submit:
@@ -59,7 +71,7 @@ jobs:
         chunk: ${{ fromJson(needs.prepare.outputs.matrix) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up mise
         uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
@@ -78,9 +90,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Download URL Chunks
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ia-url-chunks
+          path: .ia-chunks
+
       - name: Submit Chunk to Internet Archive
         uses: './.github/actions/submit-to-ia'
         with:
-          url-chunk: ${{ toJson(matrix.chunk) }}
+          url-chunk-file: .ia-chunks/chunk-${{ matrix.chunk }}.json
           ia-access-key: ${{ secrets.IA_ACCESS_KEY }}
           ia-secret-key: ${{ secrets.IA_SECRET_KEY }}

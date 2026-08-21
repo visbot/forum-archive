@@ -9,10 +9,16 @@ inputs:
     description: 'Number of URLs per chunk'
     required: false
     default: '50'
+  output-dir:
+    description: 'Directory the chunk files are written to'
+    required: false
+    default: '.ia-chunks'
 
 outputs:
   matrix:
-    description: 'JSON array of URL chunks, suitable for a job matrix'
+    description: 'JSON array of chunk indices, suitable for a job matrix'
+  chunk-dir:
+    description: 'Directory containing the chunk-<index>.json files'
 
 runs:
   using: 'node24'

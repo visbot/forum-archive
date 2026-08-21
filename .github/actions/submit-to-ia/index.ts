@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import * as core from '@actions/core';
 
 /**
@@ -177,46 +178,96 @@ function buildHeaders(): Record<string, string> {
 	};
 }
 
-/** Captures a chunk of URLs one by one, returning the ones that didn't make it. */
+function readNumber(name: string, fallback: number, min: number): number {
+	const raw = core.getInput(name);
+	const value = raw ? Number(raw) : fallback;
+
+	if (!Number.isFinite(value) || value < min) {
+		throw new Error(`Invalid ${name}: ${raw}`);
+	}
+
+	return value;
+}
+
+/**
+ * Hands out submission slots spaced `interval` apart. Captures take far longer
+ * than the interval, so several run at once while new ones still start at a
+ * rate the Archive is happy with.
+ */
+function createThrottle(interval: number): () => Promise<void> {
+	let nextSlot = 0;
+
+	return async () => {
+		const now = Date.now();
+		const slot = Math.max(now, nextSlot);
+
+		nextSlot = slot + interval;
+		await sleep(slot - now);
+	};
+}
+
+/** Captures a single URL, returning an error message when it didn't work out. */
+async function captureUrl(url: string, headers: HeadersInit, ifNotArchivedWithin: string): Promise<string | undefined> {
+	try {
+		const jobId = await requestCapture(url, headers, ifNotArchivedWithin);
+		const result = await awaitCapture(jobId, headers);
+
+		if (result.status !== 'success' || !result.timestamp) {
+			throw new Error(result.message ?? result.status_ext ?? 'capture failed');
+		}
+
+		core.info(`Archived as https://web.archive.org/web/${result.timestamp}/${url} (${result.duration_sec}s)`);
+
+		return undefined;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
+/** Captures a chunk of URLs, returning the ones that didn't make it. */
 async function submitUrls(urls: string[], headers: HeadersInit): Promise<string[]> {
 	const ifNotArchivedWithin = core.getInput('if-not-archived-within');
-	const rawDelay = core.getInput('request-delay');
-	const requestDelay = Number(rawDelay || 10_000);
+	// Authenticated accounts get 6 captures per minute and 7 concurrent sessions
+	const throttle = createThrottle(readNumber('request-delay', 10_000, 0));
+	const concurrency = readNumber('concurrency', 6, 1);
 	const failures: string[] = [];
+	// Workers pull from a shared iterator, so each URL is handed out exactly once
+	const queue = urls.values();
 
-	if (!Number.isFinite(requestDelay) || requestDelay < 0) {
-		throw new Error(`Invalid request-delay: ${rawDelay}`);
-	}
+	const worker = async (): Promise<void> => {
+		for (const url of queue) {
+			await throttle();
+			core.info(`Submitting ${url} to Internet Archive...`);
 
-	for (const [index, url] of urls.entries()) {
-		// Authenticated accounts get 6 captures per minute, so we pace ourselves
-		if (index > 0) await sleep(requestDelay);
+			const error = await captureUrl(url, headers, ifNotArchivedWithin);
 
-		core.info(`Submitting ${url} to Internet Archive...`);
-
-		try {
-			const jobId = await requestCapture(url, headers, ifNotArchivedWithin);
-			const result = await awaitCapture(jobId, headers);
-
-			if (result.status !== 'success' || !result.timestamp) {
-				throw new Error(result.message ?? result.status_ext ?? 'capture failed');
+			if (error) {
+				failures.push(url);
+				core.warning(`Failed to archive ${url}: ${error}`);
 			}
-
-			core.info(`Archived as https://web.archive.org/web/${result.timestamp}/${url} (${result.duration_sec}s)`);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-
-			failures.push(url);
-			core.warning(`Failed to archive ${url}: ${message}`);
 		}
-	}
+	};
+
+	await Promise.all(Array.from({ length: Math.min(concurrency, urls.length) }, worker));
 
 	return failures;
 }
 
+/**
+ * Reads the chunk either from a file or straight from an input. Sitemaps large
+ * enough to matter blow past the 1 MB cap on job outputs, so the workflow hands
+ * chunks over as an artifact instead of inlining them.
+ */
+async function readChunk(): Promise<string[]> {
+	const chunkFile = core.getInput('url-chunk-file');
+	const raw = chunkFile ? await readFile(chunkFile, 'utf8') : core.getInput('url-chunk', { required: true });
+
+	return JSON.parse(raw);
+}
+
 async function run(): Promise<void> {
 	try {
-		const urls: string[] = JSON.parse(core.getInput('url-chunk', { required: true }));
+		const urls = await readChunk();
 
 		core.info(`Processing ${urls.length} URLs...`);
 

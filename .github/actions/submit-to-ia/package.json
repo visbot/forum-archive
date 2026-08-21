@@ -4,5 +4,8 @@
 	"type": "module",
 	"dependencies": {
 		"@actions/core": "^3.0.1"
+	},
+	"devDependencies": {
+		"@types/node": "^26.2.0"
 	}
 }

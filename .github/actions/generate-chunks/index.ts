@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import * as core from '@actions/core';
 import Sitemapper from 'sitemapper';
 
@@ -16,14 +18,28 @@ async function run(): Promise<void> {
 			throw new Error(`Invalid chunk-size: ${core.getInput('chunk-size')}`);
 		}
 
-		const chunks: string[][] = [];
+		const outputDir = core.getInput('output-dir') || '.ia-chunks';
+		await mkdir(outputDir, { recursive: true });
 
-		for (let index = 0; index < sites.length; index += chunkSize) {
-			chunks.push(sites.slice(index, index + chunkSize));
+		const indices: number[] = [];
+
+		// The URLs themselves are written to disk rather than passed through a job
+		// output, which is capped at 1 MB. The matrix only carries chunk indices.
+		for (let index = 0; index * chunkSize < sites.length; index++) {
+			const chunk = sites.slice(index * chunkSize, (index + 1) * chunkSize);
+
+			await writeFile(join(outputDir, `chunk-${index}.json`), JSON.stringify(chunk));
+			indices.push(index);
 		}
 
-		core.info(`Split into ${chunks.length} chunks of up to ${chunkSize} URLs.`);
-		core.setOutput('matrix', JSON.stringify(chunks));
+		// GitHub refuses to schedule a matrix with more than 256 jobs
+		if (indices.length > 256) {
+			throw new Error(`${indices.length} chunks exceed the matrix limit of 256, increase chunk-size`);
+		}
+
+		core.info(`Split into ${indices.length} chunks of up to ${chunkSize} URLs.`);
+		core.setOutput('matrix', JSON.stringify(indices));
+		core.setOutput('chunk-dir', outputDir);
 	} catch (error) {
 		if (error instanceof Error) core.setFailed(error.message);
 	}
